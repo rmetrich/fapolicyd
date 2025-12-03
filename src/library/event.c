@@ -250,6 +250,7 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 	o_array *o;
 	struct proc_info *pinfo;
 	struct file_info *finfo;
+	char buf[PATH_MAX+1], *ptr;
 
 	if (needs_flush) {
 		flush_cache();
@@ -262,18 +263,33 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 	e->type = m->mask & ALL_EVENTS;
 	e->num = 0;
 
+	msg(LOG_DEBUG, "Event for pid %d, type=0x%x (%s), fd=%d", e->pid, e->type,
+		e->type & FAN_OPEN_PERM ? "FAN_OPEN_PERM" :
+			e->type & FAN_ACCESS_PERM ? "FAN_ACCESS_PERM" :
+			e->type & FAN_OPEN_EXEC_PERM ? "FAN_OPEN_EXEC_PERM" : "FAN_??",
+		e->fd);
+
 	key = compute_subject_key(subj_cache, m->pid);
 	q_node = check_lru_cache(subj_cache, key);
 	s = (s_array *)q_node->item;
 
 	// get proc fingerprint
 	pinfo = stat_proc_entry(m->pid);
-	if (pinfo == NULL)
+	if (pinfo == NULL) {
+		msg(LOG_DEBUG, "no pinfo, discarding event");
 		return 1;
+	}
+
+	ptr = get_program_from_pid(e->pid, sizeof(buf), buf);
+	msg(LOG_DEBUG, "pid %d is '%s'; subject is %sin cache", e->pid, ptr ? ptr : "??",
+		s ? "" : "NOT ");
 
 	// Check the subject to see if its what its supposed to be
 	if (s) {
 		rc = compare_proc_infos(pinfo, s->info);
+
+		msg(LOG_DEBUG, "compare_proc_infos returned %d; state=%s", rc,
+			state_str[s->info->state]);
 
 		// EXEC_PERM causes 2 events for every execute. First is an
 		// execute request. This is followed by an open request of
@@ -286,29 +302,35 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 			// special branch after ld_so exec
 			// next opens will go fall trough
 			if (s->info->path1 &&
-				(strcmp(s->info->path1, SYSTEM_LD_SO) == 0))
+				(strcmp(s->info->path1, SYSTEM_LD_SO) == 0)) {
 				s->info->state = STATE_DEFAULT_REOPEN;
-			else {
+				msg(LOG_DEBUG, "(1) new state=%s", state_str[s->info->state]);
+			} else {
 				skip_path = 1;
 				s->info->state = STATE_REOPEN;
+				msg(LOG_DEBUG, "(1) new state=%s; skip_path=1", state_str[s->info->state]);
 			}
 		}
 
 		// If not same proc or we detect execution, evict
 		evict = rc || e->type & FAN_OPEN_EXEC_PERM;
+		msg(LOG_DEBUG, "evict=%d", evict);
 
 		// We need to reset everything now that execve has finished
 		if (s->info->state == STATE_STATIC_PARTIAL && !rc) {
 			// If the static app itself launches an app right
 			// away, go back to collecting.
-			if (e->type & FAN_OPEN_EXEC_PERM)
+			if (e->type & FAN_OPEN_EXEC_PERM) {
 				s->info->state = STATE_COLLECTING;
-			else {
+				msg(LOG_DEBUG, "(2) new state=%s", state_str[s->info->state]);
+			} else {
 				s->info->state = STATE_STATIC;
 				skip_path = 1;
+				msg(LOG_DEBUG, "(2) new state=%s; skip_path=1", state_str[s->info->state]);
 			}
 			evict = 0;
 			reset_subject_attributes(s);
+			msg(LOG_DEBUG, "evict=0");
 		}
 		// Static has to sequence through a state machine to get to
 		// the point where we can do a full subject reset. Still
@@ -318,6 +340,7 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 			s->info->state = STATE_STATIC_PARTIAL;
 			evict = 0;
 			skip_path = 1;
+			msg(LOG_DEBUG, "(3) new state=%s; skip_path=1, evict=0", state_str[s->info->state]);
 		}
 
 
@@ -332,6 +355,7 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 			s->info->state = STATE_DEFAULT_REOPEN;
 			evict = 0;
 			skip_path = 1;
+			msg(LOG_DEBUG, "(4) new state=%s; skip_path=1, evict=0", state_str[s->info->state]);
 		}
 
 		// this is how STATE_REOPEN and
@@ -339,10 +363,12 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 		// in STATE_REOPEN path is always skipped
 		if ((s->info->state == STATE_REOPEN) && !skip_path &&
 				(e->type & FAN_OPEN_PERM) && !rc) {
+			msg(LOG_DEBUG, "(5) skip_path=1");
 			skip_path = 1;
 		}
 
 		if (evict) {
+			msg(LOG_DEBUG, "(6) evicted pid");
 			lru_evict(subj_cache, key);
 			q_node = check_lru_cache(subj_cache, key);
 			s = (s_array *)q_node->item;
@@ -365,8 +391,10 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 		// If this is the first time we've seen this process
 		// and its doing a file open, its likely to be a running
 		// process. That means we should not do pattern detection.
-		if (!s && (e->type & FAN_OPEN_PERM))
+		if (!s && (e->type & FAN_OPEN_PERM)) {
 			pinfo->state = STATE_NORMAL;
+			msg(LOG_DEBUG, "(8) new pinfo->state=%s", state_str[pinfo->state]);
+		}
 	} else	{ // Use the one from the cache
 		e->s = s;
 		clear_proc_info(pinfo);
@@ -377,6 +405,9 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 	// get file fingerprint
 	rc = 1;
 	finfo = stat_file_entry(m->fd);
+	if (e->fd != m->fd) msg(LOG_WARNING, "e->fd (%d) != m->fd (%d)", e->fd, m->fd);
+	ptr = get_file_from_fd(m->fd, e->pid, sizeof(buf), buf);
+	msg(LOG_DEBUG, "(9) fd %d is '%s'", m->fd, ptr ? ptr : finfo ? "no ptr but finfo" : "no finfo");
 	if (finfo == NULL) {
 		/* On stat_file_entry failure, evict the subject to avoid
 		 * leaving an incomplete subject cached, which could
@@ -397,6 +428,7 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 
 	if (o) {
 		rc = compare_file_infos(finfo, o->info);
+		msg(LOG_DEBUG, "compare_file_infos returned %d", rc);
 		if (rc) {
 			lru_evict(obj_cache, key);
 			q_node = check_lru_cache(obj_cache, key);
@@ -419,6 +451,8 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 
 	// Setup pattern info
 	pinfo = e->s->info;
+	msg(LOG_DEBUG, "(10) pinfo %s, skip_path=%d, pinfo->state=%s", pinfo ? "exists" : "DOESN'T EXIST", skip_path,
+		state_str[pinfo->state]); 
 	if (pinfo && !skip_path && pinfo->state < STATE_FULL) {
 		object_attr_t *on = get_obj_attr(e, PATH);
 		if (on) {
@@ -430,9 +464,12 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 				pinfo->elf_info = gather_elf(e->fd,
 							e->o->info->size);
 			//	pinfo->state = STATE_COLLECTING;Just for clarity
+				msg(LOG_DEBUG, "(11) new path1=%s", pinfo->path1);
 			} else if (pinfo->path2 == NULL) {
 				pinfo->path2 = strdup(file);
 				pinfo->state = STATE_PARTIAL;
+				msg(LOG_DEBUG, "(12) new path2=%s; new state=%s",
+					pinfo->path2, state_str[pinfo->state]);
 			} else {
 				// This third look is needed because the first
 				// two are still the old process as far as
@@ -440,6 +477,8 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 				// change based on the new process name.
 				pinfo->state = STATE_FULL;
 				reset_subject_attributes(s);
+				msg(LOG_DEBUG, "(13) file=%s; new state=%s",
+					file, state_str[pinfo->state]);
 			}
 		}
 	}

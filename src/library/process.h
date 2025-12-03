@@ -45,6 +45,8 @@ typedef enum {	STATE_COLLECTING=0,	// initial state - execute
 		STATE_LD_PRELOAD	// app has LD_PRELOAD or LD_AUDIT set
 } state_t;
 
+extern const char *state_str[];
+
 // This is used to determine what kind of elf file we are looking at.
 // HAS_LOAD but no HAS_DYNAMIC is staticly linked app. Normally you see both.
 #define IS_ELF		0x00001

@@ -40,6 +40,22 @@
 #include "fd-fgets.h"
 #include "attr-sets.h"
 
+const char *state_str[] = {
+	"STATE_COLLECTING",
+	"STATE_REOPEN",
+	"STATE_DEFAULT_REOPEN",
+	"STATE_STATIC_REOPEN",
+	"STATE_PARTIAL",
+	"STATE_STATIC_PARTIAL",
+	"STATE_FULL",
+	"STATE_NORMAL",
+	"STATE_NOT_ELF",
+	"STATE_LD_SO",
+	"STATE_STATIC",
+	"STATE_BAD_ELF",
+	"STATE_LD_PRELOAD"
+};
+
 #define BUFSZ 12  // Largest unsigned int is 10 characters long
 /*
  * This is an optimized integer to string conversion. It only
