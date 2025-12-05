@@ -498,6 +498,8 @@ void handle_events(void)
 			exit(1);
 		}
 
+		msg(LOG_DEBUG, "Got event: mask=0x%llx, pid=%d, fd=%d",
+			metadata->mask, metadata->pid, metadata->fd);
 		if (metadata->fd >= 0) {
 			if (metadata->mask & mask) {
 				if (metadata->pid == our_pid)
@@ -515,11 +517,14 @@ void handle_events(void)
 						    NULL);
 				}
 			} else {
+				msg(LOG_WARNING, "DISCARDED event");
 				// This should never happen. Reply with deny
 				// which releases the descriptor and kernel
 				// memory. Continue processing what was read.
 				reply_event(fd, metadata, FAN_DENY, NULL);
 			}
+		} else {
+			msg(LOG_WARNING, "NO FD");
 		}
 		metadata = FAN_EVENT_NEXT(metadata, len);
 	}

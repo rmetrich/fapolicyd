@@ -451,8 +451,9 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 
 	// Setup pattern info
 	pinfo = e->s->info;
-	msg(LOG_DEBUG, "(10) pinfo %s, skip_path=%d, pinfo->state=%s", pinfo ? "exists" : "DOESN'T EXIST", skip_path,
-		state_str[pinfo->state]); 
+	msg(LOG_DEBUG, "(10) pinfo %s, skip_path=%d, pinfo->state=%s",
+		pinfo ? "exists" : "DOESN'T EXIST", skip_path,
+		pinfo ? state_str[pinfo->state] : "no pinfo");
 	if (pinfo && !skip_path && pinfo->state < STATE_FULL) {
 		object_attr_t *on = get_obj_attr(e, PATH);
 		if (on) {
