@@ -490,6 +490,7 @@ void handle_events(void)
 		if (stop)
 			return;
 	}
+	msg(LOG_DEBUG, "Read %ld bytes from the kernel", len);
 
 	metadata = (const struct fanotify_event_metadata *)buf;
 	while (FAN_EVENT_OK(metadata, len)) {
@@ -528,5 +529,7 @@ void handle_events(void)
 		}
 		metadata = FAN_EVENT_NEXT(metadata, len);
 	}
+	if (len != 0)
+		msg(LOG_ERR, "Remaining %ld bytes in buffer", len);
 }
 

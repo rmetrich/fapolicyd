@@ -265,7 +265,6 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 
 	msg(LOG_DEBUG, "Event for pid %d, type=0x%x (%s), fd=%d", e->pid, e->type,
 		e->type & FAN_OPEN_PERM ? "FAN_OPEN_PERM" :
-			e->type & FAN_ACCESS_PERM ? "FAN_ACCESS_PERM" :
 			e->type & FAN_OPEN_EXEC_PERM ? "FAN_OPEN_EXEC_PERM" : "FAN_??",
 		e->fd);
 
@@ -283,6 +282,8 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 	ptr = get_program_from_pid(e->pid, sizeof(buf), buf);
 	msg(LOG_DEBUG, "pid %d is '%s'; subject is %sin cache", e->pid, ptr ? ptr : "??",
 		s ? "" : "NOT ");
+	ptr = get_file_from_fd(m->fd, e->pid, sizeof(buf), buf);
+	msg(LOG_DEBUG, "fd %d is '%s'", m->fd, ptr ? ptr : "??");
 
 	// Check the subject to see if its what its supposed to be
 	if (s) {
@@ -384,6 +385,8 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 		subj.pid = e->pid;
 		subject_add(e->s, &subj);
 
+		msg(LOG_DEBUG, "evict=1; setting s->info=pinfo");
+
 		// give custody of the list to the cache
 		q_node->item = e->s;
 		((s_array *)q_node->item)->info = pinfo;
@@ -406,12 +409,11 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 	rc = 1;
 	finfo = stat_file_entry(m->fd);
 	if (e->fd != m->fd) msg(LOG_WARNING, "e->fd (%d) != m->fd (%d)", e->fd, m->fd);
-	ptr = get_file_from_fd(m->fd, e->pid, sizeof(buf), buf);
-	msg(LOG_DEBUG, "(9) fd %d is '%s'", m->fd, ptr ? ptr : finfo ? "no ptr but finfo" : "no finfo");
 	if (finfo == NULL) {
 		/* On stat_file_entry failure, evict the subject to avoid
 		 * leaving an incomplete subject cached, which could
 		 * confuse later lookups and pattern matching. */
+		msg(LOG_WARNING, "finfo empty");
 		if (evict) {
 			lru_evict(subj_cache, key);
 			e->s = NULL;
@@ -451,10 +453,14 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 
 	// Setup pattern info
 	pinfo = e->s->info;
-	msg(LOG_DEBUG, "(10) pinfo %s, skip_path=%d, pinfo->state=%s",
-		pinfo ? "exists" : "DOESN'T EXIST", skip_path,
-		pinfo ? state_str[pinfo->state] : "no pinfo");
+	//msg(LOG_DEBUG, "(10) pinfo=%p, skip_path=%d, pinfo->state=%s, pinfo->path1=%s, pinfo->path2=%s",
+	msg(LOG_DEBUG, "(10) pinfo=%p, skip_path=%d, pinfo->state=%s",
+		pinfo, skip_path,
+		pinfo ? state_str[pinfo->state] : "no pinfo"/*,
+		pinfo->path1 ? pinfo->path1 : "(null)",
+		pinfo->path2 ? pinfo->path2 : "(null)"*/);
 	if (pinfo && !skip_path && pinfo->state < STATE_FULL) {
+	//if (pinfo && !skip_path && (pinfo->state < STATE_FULL || pinfo->state == STATE_LD_SO)) {
 		object_attr_t *on = get_obj_attr(e, PATH);
 		if (on) {
 			const char *file = on->o;
@@ -464,7 +470,6 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 				pinfo->path1 = strdup(file);
 				pinfo->elf_info = gather_elf(e->fd,
 							e->o->info->size);
-			//	pinfo->state = STATE_COLLECTING;Just for clarity
 				msg(LOG_DEBUG, "(11) new path1=%s", pinfo->path1);
 			} else if (pinfo->path2 == NULL) {
 				pinfo->path2 = strdup(file);
