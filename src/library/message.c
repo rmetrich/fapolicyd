@@ -26,7 +26,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
+#include <sys/time.h>
+#include <unistd.h>
 #include "message.h"
 
 /* The message mode refers to where informational messages go
@@ -71,10 +72,20 @@ void msg(int priority, const char *fmt, ...)
 		default:	   color = "\x1b[0m";  level = "UNKNOWN"; break; /* Reset */
 		}
 
+		struct timeval tv;
+		/*
 		time_t rawtime;
 		struct tm timeinfo;
 		char buffer[80];
+		*/
+		char msg[256];
 
+		(void) vsnprintf(msg, sizeof (msg), fmt, ap);
+		(void) gettimeofday(&tv, NULL);
+		fprintf(stderr, "(T%u) %ld.%06ld [ %s%s\x1b[0m ]: %s\n",
+			gettid(),
+			tv.tv_sec, tv.tv_usec, color, level, msg);
+		/*
 		time(&rawtime);
 		// localtime is not threadsafe, use _r version for safety
 		(void) localtime_r(&rawtime, &timeinfo);
@@ -88,6 +99,7 @@ void msg(int priority, const char *fmt, ...)
 
 		vfprintf(stderr, fmt, ap);
 		fputc('\n', stderr);
+		*/
 
 		fflush(stderr);
 	}
