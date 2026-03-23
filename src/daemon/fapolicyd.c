@@ -686,6 +686,10 @@ static void handle_mounts(int fd)
 		mlist_create(m);
 	}
 
+	// XXX
+	pthread_mutex_unlock(&mlist_lock);
+	return;
+
 	// Rewind the descriptor
 	lseek(fd, 0, SEEK_SET);
 	fd_fgets_state_t *st = fd_fgets_init();

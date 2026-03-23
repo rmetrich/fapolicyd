@@ -980,8 +980,10 @@ static int delete_all_entries_db()
 	int rc = 0;
 	MDB_txn *txn;
 
-	if (mdb_txn_begin(env, NULL, 0, &txn))
+	if ((rc = mdb_txn_begin(env, NULL, 0, &txn))) {
+		msg(LOG_DEBUG, "mdb_txn_begin -> %s", mdb_strerror(rc));
 		return 1;
+	}
 
 	if (open_dbi(txn)) {
 		abort_transaction(txn);
