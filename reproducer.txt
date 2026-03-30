@@ -1,0 +1,61 @@
+On the system, generate 1000 users:
+
+# i=1; while [ $i -le 1000 ]; do U=$(printf "testuser%04d" $i); useradd $U; echo redhat | passwd --stdin $U; let i++; done
+
+Change MaxStartup in sshd:
+
+MaxStartups 1000
+
+# systemctl restart sshd
+
+Disable "systemd --user" instances:
+
+# systemctl mask user@.service
+
+Avoid /run/user/XXX from being unmounted:
+
+# mkdir -p /etc/systemd/system/user-runtime-dir@.service.d
+# echo -e "[Unit]\nStopWhenUnneeded=no" > /etc/systemd/system/user-runtime-dir@.service.d/dont_stop.conf
+# systemctl daemon-reload
+
+---
+
+On the client system, setup persistent connections:
+
+$ export SSHPASS=redhat
+$ for i in $(seq 1 1000); do U="testuser$(printf "%04d" $i)"; sshpass -e ssh  -o ControlPath=/tmp/%r@%h:%p -o ControlMaster=auto -o ControlPersist=30m $U@vm-fapolicyd9 true & done
+
+
+On the client system, run the test with no fapolicyd running:
+
+NUSERS=1000; unset commands; declare -A commands; for i in $(seq 1 $NUSERS); do U="testuser$(printf "%04d" $i)"; echo "bye" | sshpass -e sftp -o ControlPath=/tmp/%r@%h:%p -o ControlMaster=auto -o ControlPersist=30m $U@vm-fapolicyd9 >/dev/null 2>&1 & commands["$U"]="$!"; done; SUCCESS=(); FAILED=(); time for u in ${!commands[@]}; do wait ${commands["$u"]}; if [ $? -ne 0 ]; then FAILED+=( $u ); else SUCCESS+=( $u); fi; done; echo "Number of success: ${#SUCCESS[@]}"; echo "Number of failure: ${#FAILED[@]}"
+
+Result:
+
+real	0m3.212s
+user	0m2.981s
+sys	0m3.354s
+Number of success: 1000
+Number of failure: 0
+
+
+On the client system, run the test with fapolicyd running: (ORIGINAL in --debug-deny)
+
+real	2m18.997s
+user	0m3.127s
+sys	0m2.743s
+Number of success: 878
+Number of failure: 122
+
+fapolicyd also reports:
+03/30/2026 17:50:48 [ WARNING ]: Processes are being evicted from the subject cache before pattern detection completes: increase subj_cache_size (total early evictions: 1051)
+
+
+On the client system, run the test with fapolicyd running: (WITH FIX in --debug-deny)
+
+real	2m32.705s
+user	0m3.223s
+sys	0m2.840s
+Number of success: 1000
+Number of failure: 0
+

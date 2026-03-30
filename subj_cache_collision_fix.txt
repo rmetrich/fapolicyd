@@ -1,0 +1,121 @@
+Subject Cache Collision Fix - Conversation Log
+================================================
+Date: 2026-03-30
+Issue: subj_cache is not reliable because it can evict a slot if there is a
+       collision on PID hashed by subj_cache size
+
+PROBLEM ANALYSIS
+================
+
+The subj_cache has a fundamental reliability issue due to how it handles hash
+collisions:
+
+Current (Broken) Implementation:
+---------------------------------
+1. compute_subject_key() uses modulo hashing: key = pid % cache_size (lru.c:450)
+2. The hash table is DIRECT-MAPPED: each slot holds only ONE entry (lru.h:42)
+3. When PIDs collide (hash to the same slot), the newer entry OVERWRITES the
+   older one (lru.c:381, 368)
+
+Example of Failure:
+-------------------
+Default cache_size = 4099
+PID 1000 arrives → key = 1000 % 4099 = 1000 → stored in hash->array[1000]
+PID 5099 arrives → key = 5099 % 4099 = 1000 → COLLISION!
+                  → overwrites hash->array[1000]
+                  → PID 1000's entry is LOST
+
+Consequences:
+-------------
+- Process state is lost even when cache isn't full
+- Lost state includes: path1, path2, elf_info, STATE_COLLECTING progress
+- Causes spurious denials (event.c:62-65 warns about this)
+- Increasing subj_cache_size only reduces probability, doesn't fix root cause
+
+Root Cause:
+-----------
+The hash table needs proper collision handling (chaining or open addressing),
+but currently just uses direct mapping where collisions cause evictions.
+
+
+SOLUTION IMPLEMENTED
+====================
+
+Implemented chained hashing to handle collisions properly:
+- Each hash slot can now hold MULTIPLE entries via a linked list
+- Colliding PIDs coexist in the same slot without evicting each other
+- Only LRU evictions remove entries when cache is truly full
+
+TECHNICAL CHANGES
+=================
+
+1. Modified QNode structure (lru.h):
+   - Added: struct QNode *hash_next  // For hash chain linkage
+   - Added: unsigned int key          // Store the full key (PID/magic)
+
+2. New hash chain helper functions (lru.c):
+   - hash_find(hash, slot, key)     // Find node by key in chain
+   - hash_remove(hash, slot, node)  // Remove node from chain
+   - hash_insert(hash, slot, node)  // Insert node at chain head
+
+3. Updated qnode_alloc() and qnode_free():
+   - Initialize/clear hash_next and key fields
+
+4. Updated enqueue():
+   - Computes slot = key % hash->size
+   - Stores full key in node->key
+   - Uses hash_insert() to add to chain
+
+5. Updated dequeue():
+   - Uses hash_remove() to remove from chain before freeing
+
+6. Updated lru_evict():
+   - Uses hash_remove() to remove from chain
+   - Better error message shows expected vs actual key
+
+7. Updated check_lru_cache():
+   - Computes slot = key % hash->size
+   - Uses hash_find() to search the chain for matching key
+   - No longer limited to one entry per slot
+
+8. Updated compute_subject_key() and compute_object_key():
+   - Now return FULL key value (PID or magic number)
+   - Modulo operation moved to internal hash operations
+   - This allows proper key comparison in chains
+
+VERIFICATION NEEDED
+===================
+
+The implementation is complete but needs compilation and testing:
+
+1. Build verification:
+   make clean && make -j$(nproc)
+
+2. Run existing tests:
+   - test_subject_eviction() should still pass
+   - test_reopen_skip_path() should still pass
+
+3. New collision test needed:
+   - Create two PIDs that hash to same slot (e.g., 1000 and 5099 with size 4099)
+   - Verify both can coexist in cache
+   - Verify correct entry is retrieved for each PID
+
+BENEFITS
+========
+
+- Eliminates premature evictions due to hash collisions
+- Cache now behaves as true LRU (oldest entry evicted when full)
+- No more spurious denials from lost process state
+- Preserves STATE_COLLECTING, path1/path2, elf_info correctly
+- Same cache size can now hold more diverse PIDs
+
+FILES MODIFIED
+==============
+
+src/library/lru.h:
+  - QNode structure extended with hash_next and key fields
+
+src/library/lru.c:
+  - Added hash chain management functions
+  - Updated all cache operations to use chaining
+  - Fixed key computation to return full values

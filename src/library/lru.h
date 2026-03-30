@@ -29,8 +29,10 @@
 // Queue is implemented using double linked list
 typedef struct QNode
 {
-	struct QNode *prev;
-	struct QNode *next;
+	struct QNode *prev;     // LRU queue linkage
+	struct QNode *next;     // LRU queue linkage
+	struct QNode *hash_next; // Hash chain linkage for collision handling
+	unsigned int key;       // The hash key for this entry
 	unsigned long uses;
 	void *item;        // the data in the cache
 } QNode;

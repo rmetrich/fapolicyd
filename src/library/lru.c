@@ -35,6 +35,9 @@
 static void dequeue(Queue *queue);
 static QNode *qnode_alloc(Queue *queue);
 static void qnode_free(Queue *queue, QNode *node);
+static QNode *hash_find(Hash *hash, unsigned int slot, unsigned int key);
+static void hash_remove(Hash *hash, unsigned int slot, QNode *node);
+static void hash_insert(Hash *hash, unsigned int slot, QNode *node);
 static Hash *create_hash(unsigned int hsize)
 {
 	unsigned int i;
@@ -81,6 +84,8 @@ static QNode *qnode_alloc(Queue *queue)
 	queue->free_list = node->next;
 	node->prev = NULL;
 	node->next = NULL;
+	node->hash_next = NULL;
+	node->key = 0;
 	node->item = NULL;
 	node->uses = 1; // Setting to 1 because its being used
 
@@ -99,8 +104,10 @@ static void qnode_free(Queue *queue, QNode *node)
 
 	node->item = NULL;
 	node->uses = 0;
+	node->key = 0;
 	node->prev = NULL;
 	node->next = queue->free_list;
+	node->hash_next = NULL;
 	queue->free_list = node;
 }
 
@@ -297,6 +304,10 @@ static void dequeue(Queue *queue)
 		return;
 
 	QNode *temp = queue->end;
+	unsigned int slot = temp->key % queue->hash->size;
+
+	// Remove from hash chain
+	hash_remove(queue->hash, slot, temp);
 	remove_node(queue, queue->end);
 
 	// Let caller know an entry is being evicted
@@ -308,6 +319,64 @@ static void dequeue(Queue *queue)
 
 	// decrement the total of full slots by 1
 	queue->count--;
+}
+
+/*
+ * hash_find - find a node in the hash chain with the given key
+ * @hash: hash table
+ * @slot: hash slot index
+ * @key:  key to search for
+ *
+ * Returns the node if found, NULL otherwise.
+ */
+static QNode *hash_find(Hash *hash, unsigned int slot, unsigned int key)
+{
+	QNode *node = hash->array[slot];
+
+	while (node) {
+		if (node->key == key)
+			return node;
+		node = node->hash_next;
+	}
+
+	return NULL;
+}
+
+/*
+ * hash_remove - remove a node from its hash chain
+ * @hash: hash table
+ * @slot: hash slot index
+ * @node: node to remove
+ */
+static void hash_remove(Hash *hash, unsigned int slot, QNode *node)
+{
+	QNode *curr = hash->array[slot];
+	QNode *prev = NULL;
+
+	while (curr) {
+		if (curr == node) {
+			if (prev)
+				prev->hash_next = node->hash_next;
+			else
+				hash->array[slot] = node->hash_next;
+			node->hash_next = NULL;
+			return;
+		}
+		prev = curr;
+		curr = curr->hash_next;
+	}
+}
+
+/*
+ * hash_insert - insert a node at the head of a hash chain
+ * @hash: hash table
+ * @slot: hash slot index
+ * @node: node to insert
+ */
+static void hash_insert(Hash *hash, unsigned int slot, QNode *node)
+{
+	node->hash_next = hash->array[slot];
+	hash->array[slot] = node;
 }
 
 /*
@@ -326,21 +395,18 @@ void lru_evict(Queue *queue, unsigned int key)
 	if (queue_is_empty(queue))
 		return;
 
-	if (key >= queue->total) {
-		msg(LOG_ERR, "lru_evict called with out of bounds key");
-		return;
-	}
-
 	Hash *hash = queue->hash;
 	QNode *temp = queue->front;
+	unsigned int slot = key % hash->size;
 
-	if (hash->array[key] != temp) {
-		msg(LOG_ERR, "lru_evict called with mismatched key %s",
-			queue->name);
+	if (temp->key != key) {
+		msg(LOG_ERR, "lru_evict called with mismatched key %s (expected %u, got %u)",
+			queue->name, key, temp->key);
 		abort();
 	}
 
-	hash->array[key] = NULL;
+	// Remove from hash chain
+	hash_remove(hash, slot, temp);
 	remove_node(queue, queue->front);
 
 	// Let caller know an entry is being evicted
@@ -361,11 +427,10 @@ static void enqueue(Queue *queue, unsigned int key)
 {
 	QNode *temp;
 	Hash *hash = queue->hash;
+	unsigned int slot = key % hash->size;
 
 	// If all slots are full, remove the page at the end
 	if (are_all_slots_full(queue)) {
-		// remove page from hash
-		hash->array[key] = NULL;
 		dequeue(queue);
 	}
 
@@ -377,8 +442,9 @@ static void enqueue(Queue *queue, unsigned int key)
 		return;
 	}
 
+	temp->key = key;
 	insert_beginning(queue, temp);
-	hash->array[key] = temp;
+	hash_insert(hash, slot, temp);
 
 	// increment number of full slots
 	queue->count++;
@@ -392,13 +458,10 @@ QNode *check_lru_cache(Queue *queue, unsigned int key)
 {
 	QNode *reqPage;
 	Hash *hash = queue->hash;
+	unsigned int slot = key % hash->size;
 
-	// Check for out of bounds key
-	if (key >= queue->total) {
-		return NULL;
-	}
-
-	reqPage = hash->array[key];
+	// Search the hash chain for the matching key
+	reqPage = hash_find(hash, slot, key);
 
 	// item is not in cache, make new spot for it
 	if (reqPage == NULL) {
@@ -446,16 +509,16 @@ void destroy_lru(Queue *queue)
 
 unsigned int compute_subject_key(const Queue *queue, unsigned int pid)
 {
-	if (queue)
-		return pid % queue->hash->size;
-	else
-		return 0;
+	// With chained hashing, return the full PID as the key
+	// The slot will be computed internally as key % hash_size
+	(void)queue;
+	return pid;
 }
 
 unsigned long compute_object_key(const Queue *queue, unsigned long num)
 {
-	if (queue)
-		return num % queue->hash->size;
-	else
-		return 0;
+	// With chained hashing, return the full magic number as the key
+	// The slot will be computed internally as key % hash_size
+	(void)queue;
+	return num;
 }

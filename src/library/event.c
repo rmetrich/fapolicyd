@@ -263,14 +263,14 @@ int new_event(const struct fanotify_event_metadata *m, event_t *e)
 	e->type = m->mask & ALL_EVENTS;
 	e->num = 0;
 
-	key = compute_subject_key(subj_cache, m->pid);
-	q_node = check_lru_cache(subj_cache, key);
-	s = (s_array *)q_node->item;
-
 	// get proc fingerprint
 	pinfo = stat_proc_entry(m->pid);
 	if (pinfo == NULL)
 		return 1;
+
+	key = compute_subject_key(subj_cache, m->pid);
+	q_node = check_lru_cache(subj_cache, key);
+	s = (s_array *)q_node->item;
 
 	// Check the subject to see if its what its supposed to be
 	if (s) {
