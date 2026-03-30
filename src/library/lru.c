@@ -60,12 +60,6 @@ static Hash *create_hash(unsigned int hsize)
 	return hash;
 }
 
-static void destroy_hash(Hash *hash)
-{
-	free(hash->array);
-	free(hash);
-}
-
 /*
  * qnode_alloc - get a QNode from the pre-allocated pool
  * @queue: queue managing the pool
@@ -170,6 +164,8 @@ static void destroy_queue(Queue *queue)
 		dequeue(queue);
 
 	free(queue->pool);
+	free(queue->hash->array);
+	free(queue->hash);
 	free(queue);
 }
 
@@ -503,7 +499,6 @@ void destroy_lru(Queue *queue)
 	if (queue == NULL)
 		return;
 
-	destroy_hash(queue->hash);
 	destroy_queue(queue);
 }
 
